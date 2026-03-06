@@ -1,20 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="DictationTool.Tests\**" />
-    <None Remove="DictationTool.Tests\**" />
+    <PackageReference Include="KokoroSharp.CPU" Version="0.6.2" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="KokoroSharp.CPU" Version="0.6.2" />
+    <ProjectReference Include="..\DictationTool.csproj" />
   </ItemGroup>
 
 </Project>

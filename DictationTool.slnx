@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DictationTool.csproj" />
+  <Project Path="DictationTool.Tests/DictationTool.Tests.csproj" />
+</Solution>
