@@ -90,6 +90,14 @@ public partial class MainWindow : Window
             RateLabel.Text = $"{e.NewValue:F1}x";
     }
 
+    private void Resume()
+    {
+        _waveOut?.Play();
+        _isPaused = false;
+        PauseButton.Content = "Pause";
+        _highlightTimer.Start();
+    }
+
     private async void PlayButton_Click(object sender, RoutedEventArgs e)
     {
         if (_tts == null || _selectedVoice == null) return;
@@ -99,10 +107,7 @@ public partial class MainWindow : Window
 
         if (_isPaused)
         {
-            _waveOut?.Play();
-            _isPaused = false;
-            PauseButton.Content = "Pause";
-            _highlightTimer.Start();
+            Resume();
             return;
         }
 
@@ -210,10 +215,7 @@ public partial class MainWindow : Window
 
         if (_isPaused)
         {
-            _waveOut.Play();
-            _isPaused = false;
-            PauseButton.Content = "Pause";
-            _highlightTimer.Start();
+            Resume();
         }
         else
         {
@@ -229,7 +231,6 @@ public partial class MainWindow : Window
         _cts?.Cancel();
         _currentJob?.Cancel();
         _highlightTimer.Stop();
-        _waveOut?.Stop();
         ResetState();
     }
 
@@ -260,9 +261,7 @@ public partial class MainWindow : Window
         _highlightTimer.Stop();
         _cts?.Cancel();
         _currentJob?.Cancel();
-        _waveOut?.Stop();
-        _waveOut?.Dispose();
-        _audioStream?.Dispose();
+        ResetState();
         _tts?.Dispose();
         base.OnClosed(e);
     }

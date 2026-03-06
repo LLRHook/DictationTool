@@ -9,6 +9,8 @@ namespace DictationTool;
 /// </summary>
 public static partial class TextNormalizer
 {
+    private static readonly HashSet<string> CommandLangs = ["bash", "sh", "zsh", "shell"];
+
     // -----------------------------------------------------------------------
     // Unit expansions
     // -----------------------------------------------------------------------
@@ -420,8 +422,7 @@ public static partial class TextNormalizer
         {
             var langTag = (m.Groups[1].Value ?? "").Trim().ToLowerInvariant();
             var body = m.Groups[2].Value.Trim();
-            var commandLangs = new HashSet<string> { "bash", "sh", "zsh", "shell" };
-            var isCommand = commandLangs.Contains(langTag);
+            var isCommand = CommandLangs.Contains(langTag);
 
             if (string.IsNullOrEmpty(langTag) && !string.IsNullOrEmpty(body))
             {
@@ -531,15 +532,12 @@ public static partial class TextNormalizer
             if (numMatch.Success)
             {
                 var items = new List<string>();
-                while (i < lines.Length)
+                var m = numMatch;
+                while (m.Success)
                 {
-                    var m = ReNumberedItem().Match(lines[i].Trim());
-                    if (m.Success)
-                    {
-                        items.Add(m.Groups[2].Value);
-                        i++;
-                    }
-                    else break;
+                    items.Add(m.Groups[2].Value);
+                    i++;
+                    m = i < lines.Length ? ReNumberedItem().Match(lines[i].Trim()) : Match.Empty;
                 }
                 for (int idx = 0; idx < items.Count; idx++)
                 {
@@ -555,15 +553,12 @@ public static partial class TextNormalizer
             if (bulletMatch.Success)
             {
                 var bulletItems = new List<(int indent, string content)>();
-                while (i < lines.Length)
+                var bm = bulletMatch;
+                while (bm.Success)
                 {
-                    var bm = ReBulletItem().Match(lines[i]);
-                    if (bm.Success)
-                    {
-                        bulletItems.Add((bm.Groups[1].Value.Length, bm.Groups[2].Value));
-                        i++;
-                    }
-                    else break;
+                    bulletItems.Add((bm.Groups[1].Value.Length, bm.Groups[2].Value));
+                    i++;
+                    bm = i < lines.Length ? ReBulletItem().Match(lines[i]) : Match.Empty;
                 }
                 var baseIndent = bulletItems.Min(b => b.indent);
                 foreach (var (indent, content) in bulletItems)
@@ -946,18 +941,14 @@ public static partial class TextNormalizer
 
     public static string CleanVersionStrings(string text)
     {
-        text = ReVersionV().Replace(text, m =>
+        static string SpeakVersion(Match m)
         {
-            var parts = m.Groups[2].Value.Split('.');
-            var spoken = string.Join(" point ", parts);
+            var spoken = string.Join(" point ", m.Groups[2].Value.Split('.'));
             return $"version {spoken}";
-        });
-        text = ReVersionBare().Replace(text, m =>
-        {
-            var parts = m.Groups[2].Value.Split('.');
-            var spoken = string.Join(" point ", parts);
-            return $"version {spoken}";
-        });
+        }
+
+        text = ReVersionV().Replace(text, SpeakVersion);
+        text = ReVersionBare().Replace(text, SpeakVersion);
         return text;
     }
 
