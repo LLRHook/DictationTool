@@ -173,14 +173,20 @@ try
     var provider = new BufferedWaveProvider(KokoroPlayback.waveFormat)
     {
         ReadFully = true,
-        BufferDuration = TimeSpan.FromMinutes(10),
+        BufferDuration = TimeSpan.FromSeconds(30),
     };
+
+    // Use a WaveOutEvent to drain the buffer (simulates real playback)
+    using var drainPlayer = new WaveOutEvent();
+    drainPlayer.Init(provider);
 
     int streamCompleted = 0;
     int streamExpected = segs.Count;
     int firstFired = 0;
     bool streamFirstCallbackOk = false;
     var streamSynthDone = new ManualResetEventSlim(false);
+    using var cts = new CancellationTokenSource();
+    var ct = cts.Token;
 
     var streamJob = KokoroJob.Create(segs, voice, 1.0f, (float[] samples) =>
     {
@@ -189,12 +195,21 @@ try
 
         var processed = KokoroPlayback.PostProcessSamples(samples);
         var bytes = KokoroPlayback.GetBytes(processed);
+
+        // Backpressure: wait for buffer space
+        while (provider.BufferLength - provider.BufferedBytes < bytes.Length)
+        {
+            if (ct.IsCancellationRequested) return;
+            Thread.Sleep(50);
+        }
+
         provider.AddSamples(bytes, 0, bytes.Length);
 
         if (Interlocked.Exchange(ref firstFired, 1) == 0)
         {
             streamFirstCallbackOk = true;
-            Console.WriteLine("  First segment ready — playback would start here");
+            drainPlayer.Play();
+            Console.WriteLine("  First segment ready — playback started to drain buffer");
         }
 
         if (c >= streamExpected)

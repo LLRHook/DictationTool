@@ -119,10 +119,12 @@ public partial class MainWindow : Window
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
 
+        _synthesisComplete = false;
+
         var provider = new BufferedWaveProvider(KokoroPlayback.waveFormat)
         {
             ReadFully = true,
-            BufferDuration = TimeSpan.FromMinutes(10),
+            BufferDuration = TimeSpan.FromSeconds(30),
         };
         _bufferedProvider = provider;
 
@@ -205,6 +207,14 @@ public partial class MainWindow : Window
 
             var processed = KokoroPlayback.PostProcessSamples(samples);
             var bytes = KokoroPlayback.GetBytes(processed);
+
+            // Backpressure: wait for buffer space before adding
+            while (provider.BufferLength - provider.BufferedBytes < bytes.Length)
+            {
+                if (ct.IsCancellationRequested) return;
+                Thread.Sleep(50);
+            }
+
             provider.AddSamples(bytes, 0, bytes.Length);
 
             if (Interlocked.Exchange(ref firstFired, 1) == 0)
