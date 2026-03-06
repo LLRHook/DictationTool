@@ -1,7 +1,6 @@
-using System.IO;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Threading;
 using KokoroSharp;
 using KokoroSharp.Core;
 using KokoroSharp.Processing;
@@ -14,18 +13,15 @@ public partial class MainWindow : Window
     private KokoroTTS? _tts;
     private KokoroVoice? _selectedVoice;
     private WaveOutEvent? _waveOut;
-    private RawSourceWaveStream? _audioStream;
+    private BufferedWaveProvider? _bufferedProvider;
     private bool _isPaused;
-    private string _originalText = "";
     private CancellationTokenSource? _cts;
     private volatile KokoroJob? _currentJob;
-    private readonly DispatcherTimer _highlightTimer;
+    private volatile bool _synthesisComplete;
 
     public MainWindow()
     {
         InitializeComponent();
-        _highlightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
-        _highlightTimer.Tick += UpdateHighlight;
         LoadModelAsync();
     }
 
@@ -95,7 +91,6 @@ public partial class MainWindow : Window
         _waveOut?.Play();
         _isPaused = false;
         PauseButton.Content = "Pause";
-        _highlightTimer.Start();
     }
 
     private async void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -111,7 +106,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        _originalText = text;
         InputBox.IsReadOnly = true;
         InputBox.Background = System.Windows.Media.Brushes.White;
         PlayButton.IsEnabled = false;
@@ -125,87 +119,119 @@ public partial class MainWindow : Window
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
 
-        try
+        var provider = new BufferedWaveProvider(KokoroPlayback.waveFormat)
         {
-            var samples = await Task.Run(
-                () => SynthesizeAll(normalized, voice, speed, _cts.Token), _cts.Token);
+            ReadFully = true,
+            BufferDuration = TimeSpan.FromMinutes(10),
+        };
+        _bufferedProvider = provider;
 
-            if (_cts.IsCancellationRequested || samples.Length == 0)
+        _waveOut?.Dispose();
+        var player = new WaveOutEvent();
+        _waveOut = player;
+        player.Init(provider);
+
+        var ct = _cts.Token;
+
+        _ = Task.Run(() =>
+        {
+            try
             {
-                ResetState();
-                return;
+                StreamingSynthesize(normalized, voice, speed, provider, onFirstSegment: () =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (_waveOut != player) return;
+                        PlayButton.Content = "Play";
+                        PauseButton.IsEnabled = true;
+                        player.Play();
+                    });
+                }, ct);
             }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show($"Synthesis failed: {ex.Message}", "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    ResetState();
+                });
+            }
+        }, ct);
 
-            var bytes = KokoroPlayback.GetBytes(samples);
-            _audioStream = new RawSourceWaveStream(new MemoryStream(bytes), KokoroPlayback.waveFormat);
-
-            _waveOut?.Dispose();
-            _waveOut = new WaveOutEvent();
-            _waveOut.Init(_audioStream);
-
-            PlayButton.Content = "Play";
-            PauseButton.IsEnabled = true;
-
-            _waveOut.Play();
-            _highlightTimer.Start();
-        }
-        catch (OperationCanceledException)
-        {
-            ResetState();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Synthesis failed: {ex.Message}", "Error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-            ResetState();
-        }
+        await WaitForPlaybackComplete(provider, ct);
     }
 
-    private float[] SynthesizeAll(string text, KokoroVoice voice, float speed, CancellationToken ct)
+    private async Task WaitForPlaybackComplete(BufferedWaveProvider provider, CancellationToken ct)
     {
-        var allSamples = new List<float>();
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (_synthesisComplete && provider.BufferedBytes == 0)
+                    break;
+                await Task.Delay(50, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+
+        if (!ct.IsCancellationRequested)
+            ResetState();
+    }
+
+    private void StreamingSynthesize(string text, KokoroVoice voice, float speed,
+        BufferedWaveProvider provider, Action onFirstSegment, CancellationToken ct)
+    {
         var tokens = Tokenizer.Tokenize(text, voice.GetLangCode(), true);
         var segments = SegmentationSystem.SplitToSegments(tokens, new DefaultSegmentationConfig());
 
-        if (segments.Count == 0) return [];
+        Debug.WriteLine($"[StreamingSynthesize] segments.Count = {segments.Count}");
 
-        using var done = new ManualResetEventSlim(false);
+        if (segments.Count == 0)
+        {
+            _synthesisComplete = true;
+            return;
+        }
+
         int completed = 0;
         int expected = segments.Count;
+        int firstFired = 0;
 
         var job = KokoroJob.Create(segments, voice, speed, (float[] samples) =>
         {
+            var c = Interlocked.Increment(ref completed);
+            Debug.WriteLine($"[StreamingSynthesize] Callback {c}/{expected} ({samples.Length} samples)");
+
             var processed = KokoroPlayback.PostProcessSamples(samples);
-            lock (allSamples) { allSamples.AddRange(processed); }
-            if (Interlocked.Increment(ref completed) >= expected)
-                done.Set();
+            var bytes = KokoroPlayback.GetBytes(processed);
+            provider.AddSamples(bytes, 0, bytes.Length);
+
+            if (Interlocked.Exchange(ref firstFired, 1) == 0)
+            {
+                onFirstSegment();
+            }
+
+            if (c >= expected)
+            {
+                Debug.WriteLine("[StreamingSynthesize] All callbacks received");
+                _synthesisComplete = true;
+            }
         });
 
         _currentJob = job;
         _tts!.EnqueueJob(job);
 
-        try { done.Wait(ct); }
-        catch (OperationCanceledException) { job.Cancel(); throw; }
-
-        lock (allSamples) { return [.. allSamples]; }
-    }
-
-    private void UpdateHighlight(object? sender, EventArgs e)
-    {
-        if (_audioStream == null || _waveOut == null) return;
-
-        if (_waveOut.PlaybackState == PlaybackState.Stopped && !_isPaused)
+        // Block until synthesis completes or is cancelled
+        while (!_synthesisComplete && !ct.IsCancellationRequested)
         {
-            _highlightTimer.Stop();
-            ResetState();
-            return;
+            ct.WaitHandle.WaitOne(50);
         }
 
-        if (_audioStream.Length > 0)
+        if (ct.IsCancellationRequested)
         {
-            var progress = (double)_audioStream.Position / _audioStream.Length;
-            var textPos = Math.Clamp((int)(progress * _originalText.Length), 0, _originalText.Length);
-            InputBox.Select(0, textPos);
+            job.Cancel();
+            throw new OperationCanceledException(ct);
         }
     }
 
@@ -222,7 +248,6 @@ public partial class MainWindow : Window
             _waveOut.Pause();
             _isPaused = true;
             PauseButton.Content = "Resume";
-            _highlightTimer.Stop();
         }
     }
 
@@ -230,7 +255,6 @@ public partial class MainWindow : Window
     {
         _cts?.Cancel();
         _currentJob?.Cancel();
-        _highlightTimer.Stop();
         ResetState();
     }
 
@@ -239,14 +263,14 @@ public partial class MainWindow : Window
         _isPaused = false;
         _currentJob = null;
 
-        _waveOut?.Stop();
-        _waveOut?.Dispose();
+        var waveOut = _waveOut;
         _waveOut = null;
+        waveOut?.Stop();
+        waveOut?.Dispose();
 
-        _audioStream?.Dispose();
-        _audioStream = null;
+        _bufferedProvider = null;
+        _synthesisComplete = false;
 
-        InputBox.Select(0, 0);
         InputBox.IsReadOnly = false;
         InputBox.ClearValue(BackgroundProperty);
         PlayButton.IsEnabled = _tts != null;
@@ -258,7 +282,6 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        _highlightTimer.Stop();
         _cts?.Cancel();
         _currentJob?.Cancel();
         ResetState();

@@ -30,9 +30,7 @@
                  VerticalScrollBarVisibility="Auto"
                  FontSize="16"
                  FontFamily="Segoe UI"
-                 Padding="8"
-                 SelectionBrush="#FFEB3B"
-                 SelectionOpacity="1.0">
+                 Padding="8">
         </TextBox>
     </DockPanel>
 </Window>
