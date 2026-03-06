@@ -1,13 +1,13 @@
 # DictationTool
 
-A Windows desktop app that reads text aloud using the [Kokoro](https://github.com/hexgrad/kokoro) text-to-speech model. Paste or type text, pick a voice, and hit Play — the app highlights words as they're spoken, like a teleprompter.
+A Windows desktop app that reads text aloud using the [Kokoro](https://github.com/hexgrad/kokoro) text-to-speech model. Paste or type text, pick a voice, and hit Play — audio starts streaming within seconds, even for long documents.
 
 ## Features
 
 - Offline TTS powered by Kokoro (ONNX, runs on CPU)
+- Streaming playback — audio begins after the first segment is synthesized, not after the entire text is processed
 - Multiple English voices (US & UK, male & female)
 - Adjustable speech speed (0.5x–2.0x)
-- Real-time text highlighting during playback
 - Play / Pause / Stop controls
 
 ## Requirements
@@ -19,6 +19,12 @@ A Windows desktop app that reads text aloud using the [Kokoro](https://github.co
 
 ```
 dotnet run
+```
+
+## Tests
+
+```
+dotnet run --project DictationTool.Tests
 ```
 
 ## Dependencies
